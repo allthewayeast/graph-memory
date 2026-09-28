@@ -147,7 +147,7 @@ export function replaceDshArchivedPrefix(
   const replacement = session.append("user/message", {
     id: `graph-memory-archive:${String(session.id ?? "session")}:${range.start}-${range.end}`,
     role: "user",
-    source: { kind: "plugin", plugin: "graph-memory" },
+    source: { kind: "plugin:graph-memory", plugin: "graph-memory" },
     content: [{ type: "text", text: DSH_ARCHIVE_MARKER }],
   }, {
     // Match the current DSH Session surface-operation contract exactly.

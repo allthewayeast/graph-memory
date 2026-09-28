@@ -321,7 +321,7 @@ export function apply(ctx: DshContext, input: Config = {}): void {
           id: randomUUID(),
           role: "user",
           content: [{ type: "text", text: user }],
-          source: { kind: "plugin", plugin: PLUGIN },
+          source: { kind: `plugin:${PLUGIN}`, plugin: PLUGIN },
         }],
       });
       for await (const chunk of chunks) {
@@ -680,9 +680,11 @@ export function apply(ctx: DshContext, input: Config = {}): void {
       const visibleMessageIds = new Set(surfaceSeqs.map(seq => `${HOST}:${key}:${String(seq)}`));
       const hasArchivedHistory = surfaceSeqs.some(seq => {
         const event = immutableEvents?.[seq];
+        const source = event?.data?.source;
+        const ownedSource = source?.kind === `plugin:${PLUGIN}`
+          || source?.kind === "plugin" && source?.plugin === PLUGIN;
         return event?.type === "user/message"
-          && event?.data?.source?.kind === "plugin"
-          && event?.data?.source?.plugin === PLUGIN
+          && ownedSource
           && event?.surfaceOp?.op === "replace";
       });
       const recalledNodes = filterDshRecallNodes(
@@ -719,7 +721,7 @@ export function apply(ctx: DshContext, input: Config = {}): void {
         id: randomUUID(),
         role: "user",
         source: {
-          kind: "plugin",
+          kind: `plugin:${PLUGIN}`,
           plugin: PLUGIN,
           form: "snapshot",
           sections: [{ name: "graph-memory:recall", text }],
