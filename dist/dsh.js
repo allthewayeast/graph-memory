@@ -115,7 +115,7 @@ export function apply(ctx, input = {}) {
     };
     const extractionEnabled = input.extractionEnabled ?? true;
     const recallEnabled = input.recallEnabled ?? true;
-    const db = openDb(config.dbPath);
+    const db = openDb(config.dbPath, { busyTimeoutMs: input.dbBusyTimeoutMs });
     const recaller = new Recaller(db, config);
     const latestRoute = new Map();
     const extractChain = new Map();

@@ -3,6 +3,8 @@
       name: 'graph-memory/dsh'
       config:
         dbPath: !!js dshHomePath('graph-memory/graph-memory.db')
+        # Maximum SQLite write-lock wait; omit for the five-second store default.
+        dbBusyTimeoutMs: !!js "process.env.GRAPH_MEMORY_DB_BUSY_TIMEOUT_MS === undefined ? undefined : Number(process.env.GRAPH_MEMORY_DB_BUSY_TIMEOUT_MS)"
         extractionEnabled: true
         recallEnabled: true
         recallMaxNodes: 6

@@ -14,6 +14,13 @@
         "default": "~/.openclaw/graph-memory.db",
         "description": "SQLite 图谱数据库路径"
       },
+      "dbBusyTimeoutMs": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647,
+        "default": 5000,
+        "description": "SQLite 写锁最多等待多少毫秒；0 表示立即报锁冲突，不改变 WAL 持久性"
+      },
       "compactTurnCount": {
         "type": "integer",
         "default": 6,

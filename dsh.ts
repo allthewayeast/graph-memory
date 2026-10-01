@@ -82,6 +82,7 @@ interface DshEmbeddingConfig {
 
 export interface Config {
   dbPath?: string;
+  dbBusyTimeoutMs?: number;
   extractionEnabled?: boolean;
   recallEnabled?: boolean;
   recallMaxNodes?: number;
@@ -241,7 +242,7 @@ export function apply(ctx: DshContext, input: Config = {}): void {
   };
   const extractionEnabled = input.extractionEnabled ?? true;
   const recallEnabled = input.recallEnabled ?? true;
-  const db = openDb(config.dbPath);
+  const db = openDb(config.dbPath, { busyTimeoutMs: input.dbBusyTimeoutMs });
   const recaller = new Recaller(db, config);
   const latestRoute = new Map<string, Route>();
   const extractChain = new Map<string, Promise<void>>();

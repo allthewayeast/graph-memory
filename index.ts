@@ -165,7 +165,7 @@ const graphMemoryPlugin = {
     }
 
     // ── 初始化核心模块 ──────────────────────────────────────
-    const db = getDb(cfg.dbPath);
+    const db = getDb(cfg.dbPath, { busyTimeoutMs: cfg.dbBusyTimeoutMs });
     const configuredLlmBaseURL = cfg.llm?.baseURL ?? cfg.llm?.baseUrl;
     const anthropicApiKey = cfg.llm?.apiKey && !configuredLlmBaseURL
       ? cfg.llm.apiKey   // If apiKey set but no baseURL, assume Anthropic direct
