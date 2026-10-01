@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertV4RowAdmission } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 
 import { apply } from "../dsh.ts";
 import { GRAPH_EXTRACTION_TOOL_NAME } from "../src/extractor/contract.ts";
@@ -183,8 +184,9 @@ describe("native DSH context takeover", () => {
     expect(events.at(-1)).toMatchObject({
       type: "user/message",
       surfaceOp: { op: "replace", startSeq: 0, endSeq: 1 },
-      data: { source: { kind: "plugin", plugin: "graph-memory" } },
+      data: { source: { kind: "plugin:graph-memory" } },
     });
+    expect(() => assertV4RowAdmission(events.at(-1))).not.toThrow();
     expect(surface).toEqual([events.length - 1, 2, 3, 4, 5]);
     await Promise.all(cleanups.map(cleanup => cleanup()));
   });
@@ -426,7 +428,10 @@ describe("native DSH context takeover", () => {
 
     expect(decision.kind).toBe("enter");
     expect(decision.messages).toHaveLength(2);
-    expect(decision.messages[0].source).toMatchObject({ kind: "plugin", plugin: "graph-memory" });
+    expect(decision.messages[0].source).toMatchObject({ kind: "plugin:graph-memory" });
+    expect(() => assertV4RowAdmission({
+      type: "user/message", seq: 0, time: Date.now(), data: decision.messages[0], surfaceOp: "append",
+    })).not.toThrow();
     const recalled = decision.messages[0].content[0].text;
     expect(recalled).toContain("季度汇报 PPT 使用品牌模板");
     expect(recalled).toContain("主题色是深海蓝");
@@ -626,6 +631,8 @@ describe("DSH completed-turn memory extraction", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0].maxTokens).toBeUndefined();
+    expect(requests[0].messages[0]).not.toHaveProperty("id");
+    expect(requests[0].messages[0]).not.toHaveProperty("source");
     expect(requests[0].reasoningEffort).toBe("off");
     expect(requests[0].tools).toHaveLength(1);
     expect(requests[0].tools[0].name).toBe(GRAPH_EXTRACTION_TOOL_NAME);

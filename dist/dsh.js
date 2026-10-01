@@ -6,6 +6,7 @@
  * Cordis lifecycle cleanup. The legacy OpenClaw entry remains index.ts.
  */
 import { randomUUID } from "node:crypto";
+import { dshMemorySource, isDshMemorySource } from "./src/format/dsh-source.js";
 import { openDb } from "./src/store/db.js";
 import { allActiveNodes, getRecentTurnMemoriesBySession, getStats, getVectorStats, getNextUnextractedTurn, getUnextractedTurn, getExtractionStats, getPendingSessionIds, getExtractionCompletedTurn, getNodeSources, markMessagesExtracted, markExtractionTurnCompleted, quarantineMessages, recordExtractionFailure, requeueQuarantined, saveMessageOnce, upsertNode, upsertTurnMemory, replaceNavigationTriples, } from "./src/store/store.js";
 import { Extractor } from "./src/extractor/extract.js";
@@ -23,7 +24,6 @@ import { messageRetentionPolicyRevision, normalizeMessageRetentionPolicy, runMes
 export const name = "graph-memory-dsh";
 export const inject = ["tools", "llm", "systemPrompt", "agentLoop", "agents", "sessions", "credentials", "tokenMeter"];
 const HOST = "dsh";
-const PLUGIN = "graph-memory";
 function sessionKey(id) {
     return `${HOST}:${String(id)}`;
 }
@@ -194,10 +194,8 @@ export function apply(ctx, input = {}) {
                 ...(input.llmMaxTokens === undefined ? {} : { maxTokens: input.llmMaxTokens }),
                 signal: controller.signal,
                 messages: [{
-                        id: randomUUID(),
                         role: "user",
                         content: [{ type: "text", text: user }],
-                        source: { kind: "plugin", plugin: PLUGIN },
                     }],
             });
             for await (const chunk of chunks) {
@@ -532,8 +530,7 @@ export function apply(ctx, input = {}) {
             const hasArchivedHistory = surfaceSeqs.some(seq => {
                 const event = immutableEvents?.[seq];
                 return event?.type === "user/message"
-                    && event?.data?.source?.kind === "plugin"
-                    && event?.data?.source?.plugin === PLUGIN
+                    && isDshMemorySource(event?.data?.source)
                     && event?.surfaceOp?.op === "replace";
             });
             const recalledNodes = filterDshRecallNodes(recalled.nodes, getNodeSources(db, recalled.nodes.map(node => node.id)), currentSession, visibleMessageIds, hasArchivedHistory);
@@ -562,8 +559,7 @@ export function apply(ctx, input = {}) {
                 id: randomUUID(),
                 role: "user",
                 source: {
-                    kind: "plugin",
-                    plugin: PLUGIN,
+                    ...dshMemorySource(),
                     form: "snapshot",
                     sections: [{ name: "graph-memory:recall", text }],
                 },

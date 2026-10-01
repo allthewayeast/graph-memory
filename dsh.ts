@@ -6,6 +6,7 @@
  * Cordis lifecycle cleanup. The legacy OpenClaw entry remains index.ts.
  */
 import { randomUUID } from "node:crypto";
+import { dshMemorySource, isDshMemorySource } from "./src/format/dsh-source.ts";
 import { openDb } from "./src/store/db.ts";
 import {
   allActiveNodes,
@@ -138,7 +139,6 @@ interface DshContext {
 }
 
 const HOST = "dsh";
-const PLUGIN = "graph-memory";
 function sessionKey(id: unknown): string {
   return `${HOST}:${String(id)}`;
 }
@@ -318,10 +318,8 @@ export function apply(ctx: DshContext, input: Config = {}): void {
         ...(input.llmMaxTokens === undefined ? {} : { maxTokens: input.llmMaxTokens }),
         signal: controller.signal,
         messages: [{
-          id: randomUUID(),
           role: "user",
           content: [{ type: "text", text: user }],
-          source: { kind: "plugin", plugin: PLUGIN },
         }],
       });
       for await (const chunk of chunks) {
@@ -681,8 +679,7 @@ export function apply(ctx: DshContext, input: Config = {}): void {
       const hasArchivedHistory = surfaceSeqs.some(seq => {
         const event = immutableEvents?.[seq];
         return event?.type === "user/message"
-          && event?.data?.source?.kind === "plugin"
-          && event?.data?.source?.plugin === PLUGIN
+          && isDshMemorySource(event?.data?.source)
           && event?.surfaceOp?.op === "replace";
       });
       const recalledNodes = filterDshRecallNodes(
@@ -719,8 +716,7 @@ export function apply(ctx: DshContext, input: Config = {}): void {
         id: randomUUID(),
         role: "user",
         source: {
-          kind: "plugin",
-          plugin: PLUGIN,
+          ...dshMemorySource(),
           form: "snapshot",
           sections: [{ name: "graph-memory:recall", text }],
         },
