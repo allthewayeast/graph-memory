@@ -71,15 +71,17 @@ The graph is a **navigation layer**, not a replacement for evidence. `TASK`, `SK
 
 ## Install on DeepSeek Harness
 
+`1.6.0-beta.17` fixes producer attribution on DSH 0.1.7+ / Session V4 (#113), extraction on models that cannot use `off` (#117), and configurable SQLite lock waiting. Context-window and recall policies remain unchanged. [Fix details and recovery instructions (Chinese) →](docs/DSH_COMPATIBILITY_20260930_CN.md)
+
 Node.js `22.13+` · no DSH fork · until npm `1.6` is published, install the pinned GitHub release:
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:adoresever/graph-memory#v1.6.0-beta.16
+npx @deepseek-ai/dsh plugin --profile web add github:adoresever/graph-memory#v1.6.0-beta.17
 npx @deepseek-ai/dsh --profile web --dump-config
 npx @deepseek-ai/dsh web
 ```
 
-The npm registry still serves the old `1.5.8`; do not use it to validate DSH. Switch to `npx @deepseek-ai/dsh plugin --profile web add graph-memory` only after `npm view graph-memory version` reports `1.6.0-beta.16` or newer.
+The npm registry still serves the old `1.5.8`; do not use it to validate DSH. Switch to `npx @deepseek-ai/dsh plugin --profile web add graph-memory` only after `npm view graph-memory version` reports `1.6.0-beta.17` or newer.
 
 Confirm that `graph-memory/dsh` is active under **Settings → Plugins**. The default database is `$DSH_HOME/graph-memory/graph-memory.db`, normally `~/.dsh/graph-memory/graph-memory.db`.
 
@@ -119,9 +121,11 @@ dsh web
 | `gm_record` | Deterministically persist a `TASK`, `SKILL`, or `EVENT` |
 | `gm_stats` | Graph and retention receipts |
 | `gm_maintain` | One bounded maintenance tick |
-| `gm_retry_extraction` | Explicitly retry quarantined extraction |
+| `gm_retry_extraction` | Explicitly retry pending or quarantined extraction |
 
 Automatic recall needs no tool call. Extraction may use a dedicated model via `GRAPH_MEMORY_LLM_PROVIDER` and `GRAPH_MEMORY_LLM_MODEL`; optional reasoning and output controls are `GRAPH_MEMORY_LLM_REASONING_EFFORT` and `GRAPH_MEMORY_LLM_MAX_TOKENS`.
+
+Without an explicit effort, extraction reads the exact model capability: prefer `off`, otherwise the host's first advertised effort, or omit the field on non-reasoning models. Route/provider failures keep source Q/A pending and report the cause in logs and `gm_status`. To recover old quarantined records, enable `assistantTools: all` and invoke `gm_retry_extraction`. Configure SQLite lock waiting with `GRAPH_MEMORY_DB_BUSY_TIMEOUT_MS` (default: 5000 milliseconds).
 
 </details>
 
@@ -160,9 +164,9 @@ The repository also contains an experimental read-only DSH Pro Lite Host + Clien
 
 ## Verification and limits
 
-Current beta `1.6.0-beta.16` passes **138/138 automated tests**, both TypeScript builds, npm package verification, and a real 20-turn run against the latest DSH source.
+Current beta `1.6.0-beta.17` passes **149/149 automated tests**, including DSH `0.2.0-rc.2`'s official V4 validator and real SQLite write contention. The GLM-5.2 20-turn figures above come from the navigation-upgrade run on 2026-09-09; this compatibility patch did not rerun that paid experiment.
 
-- Structured extraction still depends on model contract compliance: the latest run succeeded 20/20 times; any future failure stays quarantined and never blocks the foreground conversation.
+- Structured extraction still depends on model contract compliance: the historical run succeeded 20/20 times. Contract failures stay quarantined; route/provider failures remain pending for explicit retry after configuration is corrected.
 - Recall is bounded by configurable Top-K. Focused probes succeeded; one broad multi-topic query can require a larger Top-K or separate questions.
 - The published run is an engineering workload, not a universal LoCoMo/LongMemEval score.
 - The design, source-code map, and porting sequence for the summary + SPO navigation + exact-Q/A upgrade are documented in the [Chinese upgrade guide](docs/TURN_MEMORY_NAVIGATION_UPGRADE_CN.md).

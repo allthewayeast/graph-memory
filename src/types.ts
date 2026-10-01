@@ -145,6 +145,8 @@ export interface EmbeddingConfig {
 
 export interface GmConfig {
   dbPath: string;
+  /** SQLite write-lock wait in milliseconds; omitted uses the shared store policy. */
+  dbBusyTimeoutMs?: number;
   compactTurnCount: number;
   /** Maximum query-matched memory nodes returned by one recall. */
   recallMaxNodes: number;

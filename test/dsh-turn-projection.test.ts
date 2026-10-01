@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { assertV4RowAdmission } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 
 import {
   projectDshCompletedTurnMemory,
@@ -104,6 +105,7 @@ describe("DSH completed-turn surface projection", () => {
       finalAnswerSeq: 5,
     });
     expect(result.shadowedTokenCount).toBe(200);
+    expect(() => assertV4RowAdmission(appended[1])).not.toThrow();
     expect(appended[1].options).toEqual({
       surfaceOp: { op: "replace", startSeq: 3, endSeq: 4 },
       sourceEventSeqs: [10, 3, 4],

@@ -71,15 +71,17 @@ Graph Memory 接管的是**发给模型的历史表面**，不会删除 DSH 的�
 
 ## 安装到 DeepSeek Harness
 
+`1.6.0-beta.17` 修复 DSH 0.1.7+ / Session V4 的消息来源兼容问题（#113）和抽取模型不支持 `off` 导致的记忆失效（#117）；SQLite 写锁等待可配置。上下文窗口和召回策略保持原样。[修复内容与旧数据恢复 →](docs/DSH_COMPATIBILITY_20260930_CN.md)
+
 Node.js 22.13+ · 不 fork DSH · 在 npm `1.6` 发布完成前，请安装已经固定的 GitHub 版本：
 
 ```bash
-npx @deepseek-ai/dsh plugin --profile web add github:adoresever/graph-memory#v1.6.0-beta.16
+npx @deepseek-ai/dsh plugin --profile web add github:adoresever/graph-memory#v1.6.0-beta.17
 npx @deepseek-ai/dsh --profile web --dump-config
 npx @deepseek-ai/dsh web
 ```
 
-npm registry 当前仍是旧版 `1.5.8`，不要用它验证 DSH。待 `npm view graph-memory version` 返回 `1.6.0-beta.16` 或更新版本后，才改用 `npx @deepseek-ai/dsh plugin --profile web add graph-memory`。
+npm registry 当前仍是旧版 `1.5.8`，不要用它验证 DSH。待 `npm view graph-memory version` 返回 `1.6.0-beta.17` 或更新版本后，才改用 `npx @deepseek-ai/dsh plugin --profile web add graph-memory`。
 
 在 **Settings → Plugins** 确认 graph-memory/dsh 已启用。默认数据库位于 $DSH_HOME/graph-memory/graph-memory.db，通常是 ~/.dsh/graph-memory/graph-memory.db。
 
@@ -119,9 +121,11 @@ dsh web
 | gm_record | 确定性写入 TASK、SKILL 或 EVENT |
 | gm_stats | 图谱与保留策略回执 |
 | gm_maintain | 执行一次有界维护 |
-| gm_retry_extraction | 显式重试隔离的抽取任务 |
+| gm_retry_extraction | 显式重试待处理或隔离的抽取任务 |
 
 自动召回不需要工具调用。抽取可通过 GRAPH_MEMORY_LLM_PROVIDER 和 GRAPH_MEMORY_LLM_MODEL 使用独立模型；可选控制项为 GRAPH_MEMORY_LLM_REASONING_EFFORT 与 GRAPH_MEMORY_LLM_MAX_TOKENS。
+
+未指定推理档位时，插件读取模型能力：支持 `off` 就关闭思考，否则使用宿主声明的第一个档位；无推理能力时不发送该字段。路由或供应商错误保留原始问答为待处理状态，并在日志和 `gm_status` 中显示具体原因。恢复旧版已隔离记录时，启用 `assistantTools: all` 后调用 `gm_retry_extraction`。SQLite 锁等待通过 `GRAPH_MEMORY_DB_BUSY_TIMEOUT_MS` 配置，默认 5000 毫秒。
 
 </details>
 
@@ -160,9 +164,9 @@ openclaw gateway restart
 
 ## 验证与边界
 
-当前 beta 1.6.0-beta.16 已通过 **138/138 自动化测试**、两套 TypeScript 构建、npm 包验证，并用最新 DSH 源码完成真实 20 轮运行。
+当前 beta `1.6.0-beta.17` 已通过 **149/149 自动化测试**，包含 DSH `0.2.0-rc.2` 官方 V4 校验器回归和真实 SQLite 写锁争用。上方 GLM-5.2 的 20 轮结果来自 2026-09-09 的导航升级实验；此次兼容性修复未重新运行该付费实验。
 
-- 结构化抽取仍依赖模型遵守合同：最新实测 20/20 成功；未来若失败，数据保持隔离且不会阻塞前台对话。
+- 结构化抽取仍依赖模型遵守合同：历史实测 20/20 成功。结构合同错误保持隔离；模型路由和供应商错误保持待处理，修正配置后可显式重试。
 - 召回数量由 Top-K 限制。聚焦问题实测成功；一次包含多个主题的宽查询可能需要提高 Top-K 或拆开提问。
 - 当前发布的是工程工作流实测，不是 LoCoMo/LongMemEval 的通用分数。
 - 本次“轮次摘要 + SPO 导航 + 精确问答事实源”升级的设计、代码落点和移植步骤见 [升级与移植指南](docs/TURN_MEMORY_NAVIGATION_UPGRADE_CN.md)。

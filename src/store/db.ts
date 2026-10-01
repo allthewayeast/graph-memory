@@ -12,6 +12,14 @@ import { homedir } from "os";
 
 let _db: DatabaseSyncInstance | null = null;
 
+export interface DatabaseOptions {
+  /** Maximum wait for another connection's write lock. Zero explicitly opts out. */
+  busyTimeoutMs?: number;
+}
+
+/** Storage contention policy: wait up to five seconds, configurable by the host. */
+export const DEFAULT_DB_BUSY_TIMEOUT_MS = 5_000;
+
 export function resolvePath(p: string): string {
   return p.replace(/^~/, homedir());
 }
@@ -23,7 +31,12 @@ export function resolvePath(p: string): string {
  * should use this API and close the returned instance from their disposer.
  * The legacy OpenClaw adapter continues to use getDb() below.
  */
-export function openDb(dbPath: string): DatabaseSyncInstance {
+export function openDb(dbPath: string, options: DatabaseOptions = {}): DatabaseSyncInstance {
+  const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_DB_BUSY_TIMEOUT_MS;
+  // SQLite's busy_timeout accepts a signed 32-bit millisecond duration.
+  if (!Number.isInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 2_147_483_647) {
+    throw new TypeError("[graph-memory] dbBusyTimeoutMs must be an integer between 0 and 2147483647");
+  }
   const resolved = resolvePath(dbPath);
   
   // 修复：同时处理 Windows 和 Unix 路径分隔符
@@ -44,10 +57,18 @@ export function openDb(dbPath: string): DatabaseSyncInstance {
   }
 
   const db = new DatabaseSync(resolved);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  migrate(db);
-  return db;
+  try {
+    // Install the lock handler before journal setup and migrations, which can
+    // contend too. Keep SQLite's FULL durability and automatic checkpoint.
+    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA foreign_keys = ON");
+    migrate(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 /**
@@ -55,9 +76,9 @@ export function openDb(dbPath: string): DatabaseSyncInstance {
  * New host adapters must prefer openDb() so each plugin instance owns its
  * connection and can dispose it without affecting another profile/fiber.
  */
-export function getDb(dbPath: string): DatabaseSyncInstance {
+export function getDb(dbPath: string, options: DatabaseOptions = {}): DatabaseSyncInstance {
   if (_db) return _db;
-  _db = openDb(dbPath);
+  _db = openDb(dbPath, options);
   return _db;
 }
 

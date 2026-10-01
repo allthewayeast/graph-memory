@@ -9,6 +9,8 @@
  * gm_messages for extraction and source-backed recall.
  */
 
+import { dshMemorySource } from "./dsh-source.ts";
+
 interface DshTurnEvent {
   type?: string;
   seq?: number;
@@ -228,7 +230,7 @@ export function replaceDshCompletedTurnTrace(
   const replacement = session.append("user/message", {
     id: `graph-memory-turn-trace:${String(session.id ?? "session")}:${range.turn}`,
     role: "user",
-    source: { kind: "plugin:graph-memory", plugin: "graph-memory" },
+    source: dshMemorySource(),
     content: [{
       type: "text",
       text: `<graph-memory-trace turn="${range.turn}">Intermediate tool trace archived; the original question and final answer remain visible.</graph-memory-trace>`,

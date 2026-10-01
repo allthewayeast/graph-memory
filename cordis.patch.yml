@@ -3,6 +3,8 @@
       name: 'graph-memory/dsh'
       config:
         dbPath: !!js dshHomePath('graph-memory/graph-memory.db')
+        # Maximum SQLite write-lock wait; omit for the five-second store default.
+        dbBusyTimeoutMs: !!js "process.env.GRAPH_MEMORY_DB_BUSY_TIMEOUT_MS === undefined ? undefined : Number(process.env.GRAPH_MEMORY_DB_BUSY_TIMEOUT_MS)"
         extractionEnabled: true
         recallEnabled: true
         recallMaxNodes: 6
@@ -17,10 +19,9 @@
         # are set, this route takes precedence over the foreground Agent model.
         llmProvider: !!js process.env.GRAPH_MEMORY_LLM_PROVIDER
         llmModel: !!js process.env.GRAPH_MEMORY_LLM_MODEL
-        # Local patch: providers that cannot disable reasoning reject "off"
-        # (the plugin's built-in default), which quarantines every extraction.
-        # Fall back to the cheapest declared level unless the env var overrides it.
-        llmReasoningEffort: !!js "process.env.GRAPH_MEMORY_LLM_REASONING_EFFORT ? process.env.GRAPH_MEMORY_LLM_REASONING_EFFORT : 'low'"
+        # Leave unset for model-capability negotiation; explicit IDs must be
+        # advertised by the chosen provider/model route.
+        llmReasoningEffort: !!js process.env.GRAPH_MEMORY_LLM_REASONING_EFFORT
         llmMaxTokens: !!js "process.env.GRAPH_MEMORY_LLM_MAX_TOKENS ? Number(process.env.GRAPH_MEMORY_LLM_MAX_TOKENS) : undefined"
         # Each committed DSH turn is one extraction job containing only the
         # original user question and the final visible assistant answer.

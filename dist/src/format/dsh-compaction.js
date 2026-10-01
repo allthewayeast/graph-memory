@@ -6,6 +6,7 @@
  * old prefix with a constant-size archive marker and retrieves relevant facts
  * from the durable memory store. No summarizer model call is involved.
  */
+import { dshMemorySource } from "./dsh-source.js";
 /** Read the immutable log through DSH's public API, with legacy compatibility. */
 function sessionEvents(session) {
     if (typeof session.snapshotEvents === "function")
@@ -99,7 +100,7 @@ export function replaceDshArchivedPrefix(session, tokenMeter, range) {
     const replacement = session.append("user/message", {
         id: `graph-memory-archive:${String(session.id ?? "session")}:${range.start}-${range.end}`,
         role: "user",
-        source: { kind: "plugin:graph-memory", plugin: "graph-memory" },
+        source: dshMemorySource(),
         content: [{ type: "text", text: DSH_ARCHIVE_MARKER }],
     }, {
         // Match the current DSH Session surface-operation contract exactly.

@@ -1,7 +1,7 @@
 {
   "id": "graph-memory",
   "name": "Graph Memory",
-  "version": "1.6.0-beta.13",
+  "version": "1.6.0-beta.17",
   "description": "知识图谱记忆引擎：从对话提取三元组，按当前问题进行向量/FTS5 召回并接管上下文",
   "contracts": {
     "tools": ["gm_search", "gm_record", "gm_update", "gm_stats", "gm_maintain"]
@@ -13,6 +13,13 @@
         "type": "string",
         "default": "~/.openclaw/graph-memory.db",
         "description": "SQLite 图谱数据库路径"
+      },
+      "dbBusyTimeoutMs": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647,
+        "default": 5000,
+        "description": "SQLite 写锁最多等待多少毫秒；0 表示立即报锁冲突，不改变 WAL 持久性"
       },
       "compactTurnCount": {
         "type": "integer",

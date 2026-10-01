@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertV4RowAdmission } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 
 import { apply } from "../dsh.ts";
 import { GRAPH_EXTRACTION_TOOL_NAME } from "../src/extractor/contract.ts";
@@ -183,8 +184,9 @@ describe("native DSH context takeover", () => {
     expect(events.at(-1)).toMatchObject({
       type: "user/message",
       surfaceOp: { op: "replace", startSeq: 0, endSeq: 1 },
-      data: { source: { kind: "plugin", plugin: "graph-memory" } },
+      data: { source: { kind: "plugin:graph-memory" } },
     });
+    expect(() => assertV4RowAdmission(events.at(-1))).not.toThrow();
     expect(surface).toEqual([events.length - 1, 2, 3, 4, 5]);
     await Promise.all(cleanups.map(cleanup => cleanup()));
   });
@@ -426,7 +428,10 @@ describe("native DSH context takeover", () => {
 
     expect(decision.kind).toBe("enter");
     expect(decision.messages).toHaveLength(2);
-    expect(decision.messages[0].source).toMatchObject({ kind: "plugin", plugin: "graph-memory" });
+    expect(decision.messages[0].source).toMatchObject({ kind: "plugin:graph-memory" });
+    expect(() => assertV4RowAdmission({
+      type: "user/message", seq: 0, time: Date.now(), data: decision.messages[0], surfaceOp: "append",
+    })).not.toThrow();
     const recalled = decision.messages[0].content[0].text;
     expect(recalled).toContain("季度汇报 PPT 使用品牌模板");
     expect(recalled).toContain("主题色是深海蓝");
@@ -470,7 +475,10 @@ function adapterContext(llmStream: (options?: any) => AsyncGenerator<any>) {
   const log = (level: string) => (...args: any[]) => logs.push(`${level}:${args.join(" ")}`);
   const context: any = {
     logger: { info: log("info"), warn: log("warn"), error: log("error") },
-    llm: { stream: llmStream },
+    llm: {
+      stream: llmStream,
+      async resolveModelInfo() { return { reasoning: { efforts: [{ id: "off" }, { id: "low" }] } }; },
+    },
     tools: { register(definition: any) { tools.set(definition.name, definition); return () => {}; } },
     credentials: { async resolve() { return undefined; } },
     agentPresets: { serviceFor() { return undefined; } },
@@ -508,6 +516,117 @@ function countState(dbPath: string, state: string): number {
 }
 
 describe("DSH completed-turn memory extraction", () => {
+  it.each([
+    { label: "off supported", info: { reasoning: { efforts: [{ id: "low" }, { id: "off" }] } }, expected: "off" },
+    { label: "off unavailable", info: { reasoning: { efforts: [{ id: "low" }, { id: "high" }, { id: "max" }] } }, expected: "low" },
+    { label: "no reasoning capability", info: {}, expected: undefined },
+    { label: "provider-owned effort IDs", info: { reasoning: { efforts: [{ id: "economical" }] } }, expected: "economical" },
+    { label: "older host without model info", info: null, expected: undefined },
+  ])("extracts exactly once for $label", async ({ info, expected }) => {
+    const dir = mkdtempSync(join(tmpdir(), "gm-reasoning-capability-"));
+    const dbPath = join(dir, "graph-memory.db");
+    const requests: any[] = [];
+    const { context, listeners, cleanups } = adapterContext(async function* (options: any) {
+      requests.push(options);
+      yield structuredExtraction(EMPTY_EXTRACTION);
+      yield { type: "finish", reason: { kind: "tool-calls" } };
+    });
+    if (info === null) delete context.llm.resolveModelInfo;
+    else context.llm.resolveModelInfo = async (provider: string, model: string) => {
+      expect([provider, model]).toEqual(["gateway", "custom-model"]);
+      return info;
+    };
+    apply(context, { dbPath, recallEnabled: false, llmProvider: "gateway", llmModel: "custom-model" });
+    try {
+      const session: any = { id: "capability", events: [
+        { type: "turn/start", seq: 0, data: { turn: 1 } }, userMsg(1, "question"),
+        { type: "assistant/message", seq: 2, data: { turn: 1, message: { content: [{ type: "text", text: "answer" }] } } },
+        { type: "turn/end", seq: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      ] };
+      await listeners.get("session/event")![0](session, session.events[3]);
+      await waitFor(() => countState(dbPath, "succeeded") === 2);
+      expect(requests).toHaveLength(1);
+      expect(requests[0].reasoningEffort).toBe(expected);
+      if (expected === undefined) expect(requests[0]).not.toHaveProperty("reasoningEffort");
+      expect(countState(dbPath, "quarantined")).toBe(0);
+    } finally {
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps unsupported explicit effort pending and recovers through the existing retry tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gm-route-recovery-"));
+    const dbPath = join(dir, "graph-memory.db");
+    const requests: any[] = [];
+    const { context, listeners, cleanups, logs, tools } = adapterContext(async function* (options: any) {
+      requests.push(options);
+      yield structuredExtraction(EMPTY_EXTRACTION);
+      yield { type: "finish", reason: { kind: "tool-calls" } };
+    });
+    let efforts = [{ id: "low" }];
+    context.llm.resolveModelInfo = async () => ({ reasoning: { efforts } });
+    apply(context, {
+      dbPath, recallEnabled: false, llmProvider: "gateway", llmModel: "custom-model",
+      llmReasoningEffort: "off", assistantTools: "all",
+    });
+    try {
+      const session: any = { id: "route-recovery", events: [
+        { type: "turn/start", seq: 0, data: { turn: 1 } }, userMsg(1, "question"),
+        { type: "assistant/message", seq: 2, data: { turn: 1, message: { content: [{ type: "text", text: "answer" }] } } },
+        { type: "turn/end", seq: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      ] };
+      await listeners.get("session/event")![0](session, session.events[3]);
+      await waitFor(() => logs.some(log => log.includes("extraction unavailable")));
+      expect(requests).toHaveLength(0);
+      expect(countState(dbPath, "pending")).toBe(2);
+      expect(countState(dbPath, "quarantined")).toBe(0);
+      expect(logs.join("\n")).toContain('does not support reasoning effort "off"');
+      expect(await tools.get("gm_status").execute()).toContain("Extraction attention required");
+      // A manual drain against the unchanged bad route stops without a loop.
+      await tools.get("gm_retry_extraction").execute();
+      await waitFor(() => logs.filter(log => log.includes("extraction unavailable")).length === 2);
+      expect(requests).toHaveLength(0);
+      efforts = [{ id: "off" }, { id: "low" }];
+      await tools.get("gm_retry_extraction").execute();
+      await waitFor(() => countState(dbPath, "succeeded") === 2);
+      expect(requests).toHaveLength(1);
+      expect(await tools.get("gm_status").execute()).not.toContain("Extraction attention required");
+    } finally {
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a provider rejection without quarantining the source or making retries", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gm-provider-rejection-"));
+    const dbPath = join(dir, "graph-memory.db");
+    let calls = 0;
+    const { context, listeners, cleanups, logs } = adapterContext(async function* () {
+      calls += 1;
+      yield { type: "finish", reason: { kind: "error", failure: {
+        code: "UNSUPPORTED_REASONING_EFFORT", message: "provider changed supported efforts",
+      } } };
+    });
+    apply(context, { dbPath, recallEnabled: false, llmProvider: "gateway", llmModel: "custom-model" });
+    try {
+      const session: any = { id: "provider-rejection", events: [
+        { type: "turn/start", seq: 0, data: { turn: 1 } }, userMsg(1, "question"),
+        { type: "assistant/message", seq: 2, data: { turn: 1, message: { content: [{ type: "text", text: "answer" }] } } },
+        { type: "turn/end", seq: 3, data: { turn: 1, reason: { kind: "completed" } } },
+      ] };
+      await listeners.get("session/event")![0](session, session.events[3]);
+      await waitFor(() => logs.some(log => log.includes("UNSUPPORTED_REASONING_EFFORT")));
+      expect(countState(dbPath, "pending")).toBe(2);
+      expect(countState(dbPath, "quarantined")).toBe(0);
+      expect(calls).toBe(1);
+      expect(logs.join("\n")).toContain("provider changed supported efforts");
+    } finally {
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("never imports an existing Session backlog automatically", async () => {
     const dir = mkdtempSync(join(tmpdir(), "gm-live-turn-only-"));
     const dbPath = join(dir, "graph-memory.db");
@@ -626,6 +745,8 @@ describe("DSH completed-turn memory extraction", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0].maxTokens).toBeUndefined();
+    expect(requests[0].messages[0]).not.toHaveProperty("id");
+    expect(requests[0].messages[0]).not.toHaveProperty("source");
     expect(requests[0].reasoningEffort).toBe("off");
     expect(requests[0].tools).toHaveLength(1);
     expect(requests[0].tools[0].name).toBe(GRAPH_EXTRACTION_TOOL_NAME);
