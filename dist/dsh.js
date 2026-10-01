@@ -7,6 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { dshMemorySource, isDshMemorySource } from "./src/format/dsh-source.js";
+import { DshExtractionUnavailableError, resolveDshExtractionReasoning, } from "./src/engine/dsh-extraction-route.js";
 import { openDb } from "./src/store/db.js";
 import { allActiveNodes, getRecentTurnMemoriesBySession, getStats, getVectorStats, getNextUnextractedTurn, getUnextractedTurn, getExtractionStats, getPendingSessionIds, getExtractionCompletedTurn, getNodeSources, markMessagesExtracted, markExtractionTurnCompleted, quarantineMessages, recordExtractionFailure, requeueQuarantined, saveMessageOnce, upsertNode, upsertTurnMemory, replaceNavigationTriples, } from "./src/store/store.js";
 import { Extractor } from "./src/extractor/extract.js";
@@ -90,9 +91,8 @@ export function apply(ctx, input = {}) {
     if ((input.llmProvider === undefined) !== (input.llmModel === undefined)) {
         throw new TypeError("[graph-memory] llmProvider and llmModel must be configured together");
     }
-    const extractionReasoningEffort = input.llmReasoningEffort ?? "off";
-    if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(extractionReasoningEffort)) {
-        throw new TypeError(`[graph-memory] unsupported llmReasoningEffort ${String(extractionReasoningEffort)}`);
+    if (input.llmReasoningEffort !== undefined && (typeof input.llmReasoningEffort !== "string" || !input.llmReasoningEffort.trim())) {
+        throw new TypeError("[graph-memory] llmReasoningEffort must be a non-empty provider effort ID");
     }
     const messageRetention = normalizeMessageRetentionPolicy(input.messageRetention);
     const credentialRef = input.embedding?.apiKeyEnv;
@@ -125,6 +125,7 @@ export function apply(ctx, input = {}) {
     let closing = false;
     let abortingExtraction = false;
     const activeExtractionControllers = new Set();
+    const reportedExtractionRoutes = new Set();
     const compactionAttached = new WeakSet();
     const compactionMetrics = {
         attached: 0,
@@ -177,7 +178,7 @@ export function apply(ctx, input = {}) {
         // win; the foreground route is only a zero-configuration fallback.
         const selectedRoute = configured ?? route;
         if (!selectedRoute) {
-            throw new Error("[graph-memory] DSH has not recorded a model route yet; send one normal message first or configure llmProvider/llmModel");
+            throw new DshExtractionUnavailableError("[graph-memory] DSH has not recorded a model route yet; send one normal message first or configure llmProvider/llmModel");
         }
         const controller = new AbortController();
         activeExtractionControllers.add(controller);
@@ -185,10 +186,16 @@ export function apply(ctx, input = {}) {
         let blockText = "";
         const structuredCalls = [];
         try {
+            const reasoningEffort = await resolveDshExtractionReasoning(ctx.llm, selectedRoute, input.llmReasoningEffort, controller.signal);
+            const routeLabel = `${selectedRoute.provider}/${selectedRoute.model} (${reasoningEffort ?? "provider default"})`;
+            if (!reportedExtractionRoutes.has(routeLabel)) {
+                reportedExtractionRoutes.add(routeLabel);
+                ctx.logger.info(`[graph-memory] extraction route: ${routeLabel}`);
+            }
             const chunks = ctx.llm.stream({
                 provider: selectedRoute.provider,
                 model: selectedRoute.model,
-                reasoningEffort: extractionReasoningEffort,
+                ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
                 system: `${system}\n\nYou must call ${GRAPH_EXTRACTION_TOOL_NAME} exactly once. Do not emit a text response.`,
                 tools: [GRAPH_EXTRACTION_TOOL],
                 ...(input.llmMaxTokens === undefined ? {} : { maxTokens: input.llmMaxTokens }),
@@ -215,8 +222,12 @@ export function apply(ctx, input = {}) {
                     if (chunk.reason?.kind === "max-tokens") {
                         throw new Error("[graph-memory] DSH LLM returned an incomplete max-tokens extraction");
                     }
-                    if (chunk.reason?.kind === "error" || chunk.reason?.kind === "aborted") {
-                        throw new Error(`[graph-memory] DSH LLM ${chunk.reason.kind}: ${chunk.reason.failure?.message ?? "unknown failure"}`);
+                    if (chunk.reason?.kind === "error") {
+                        throw new DshExtractionUnavailableError(`[graph-memory] DSH LLM error (${chunk.reason.failure?.code ?? "unknown"}): ` +
+                            `${chunk.reason.failure?.message ?? "unknown failure"}`);
+                    }
+                    if (chunk.reason?.kind === "aborted") {
+                        throw new DshExtractionUnavailableError("[graph-memory] DSH extraction request aborted");
                     }
                 }
             }
@@ -306,26 +317,36 @@ export function apply(ctx, input = {}) {
         if (messages.length !== 2) {
             markMessagesExtracted(db, ids);
             ctx.logger.info(`[graph-memory] DSH skipped turn=${rows[0]?.turn_index}: no complete question/final-answer pair`);
-            return;
+            return true;
         }
         try {
             await extractOnce(sessionId, sid, messages);
             markMessagesExtracted(db, ids);
+            return true;
         }
         catch (cause) {
             // A one-shot/headless host may dispose immediately after turn/end. The
             // plugin then aborts its own background stream so shutdown can finish.
             // That is lifecycle backpressure, not malformed memory: leave the
-            // durable pair pending for the existing startup recovery path instead
+            // durable pair pending for explicit-route startup recovery instead
             // of turning every short-lived session into a permanent quarantine.
             if (closing || abortingExtraction) {
                 ctx.logger.info(`[graph-memory] DSH extraction deferred at shutdown for turn=${rows[0].turn_index}`);
-                return;
+                return false;
             }
             const error = cause instanceof Error ? cause : new Error(String(cause));
             recordExtractionFailure(db, ids, error.message, null);
+            if (error instanceof DshExtractionUnavailableError
+                || error.code === "UNSUPPORTED_REASONING_EFFORT") {
+                ctx.logger.warn(`[graph-memory] extraction unavailable turn=${rows[0].turn_index}; source Q/A remains pending. ` +
+                    `${error.message}. Correct the extraction route and run gm_retry_extraction (assistantTools: all).`);
+                // An administrative drain must stop on pending configuration failures,
+                // rather than immediately selecting the same turn and looping forever.
+                return false;
+            }
             quarantineMessages(db, ids, error.message);
-            ctx.logger.warn(`[graph-memory] DSH extraction quarantined turn=${rows[0].turn_index} after one failed structured call`);
+            ctx.logger.warn(`[graph-memory] DSH extraction quarantined turn=${rows[0].turn_index}: ${error.message}`);
+            return true;
         }
     }
     async function extractPending(sessionId) {
@@ -339,7 +360,8 @@ export function apply(ctx, input = {}) {
             const rows = getNextUnextractedTurn(db, sid, completedTurn);
             if (!rows.length)
                 return;
-            await drainTurn(sessionId, sid, rows);
+            if (!await drainTurn(sessionId, sid, rows))
+                return;
         }
     }
     function scheduleExtract(sessionId, liveTurn) {
@@ -650,8 +672,13 @@ export function apply(ctx, input = {}) {
             const messageCount = Number(db.prepare("SELECT COUNT(*) AS count FROM gm_messages").get()?.count ?? 0);
             const turnVectorCount = Number(db.prepare("SELECT COUNT(*) AS count FROM gm_turn_vectors").get()?.count ?? 0);
             const extraction = getExtractionStats(db);
+            const latestFailure = db.prepare(`
+        SELECT extraction_error FROM gm_messages
+        WHERE extraction_state <> 'succeeded' AND extraction_error IS NOT NULL
+        ORDER BY extraction_updated_at DESC LIMIT 1
+      `).get();
             const retentionRevision = messageRetentionPolicyRevision(messageRetention);
-            return `Graph Memory active (DSH native)\nStore: ${config.dbPath}\nTurn memories: ${stats.turnMemories}\nNavigation: ${stats.navigationTerms} terms / ${stats.navigationTriples} triples / ${stats.navigationCommunities} communities\nLegacy graph: ${stats.totalNodes} nodes / ${stats.totalEdges} edges\nMessages: ${messageCount}\nExtraction: ${extractionEnabled ? "enabled" : "disabled"} (pending=${extraction.pending}, succeeded=${extraction.succeeded}, quarantined=${extraction.quarantined})\nExtraction source: one completed turn = user question + final answer\nExtraction scheduling: live turn/end only, one serial worker per session, no startup history import, no automatic retries\nRecall: ${recallEnabled ? "enabled" : "disabled"}\nEmbedding: ${embeddingState}${embeddingModel}\nTurn vectors: ${turnVectorCount}/${stats.turnMemories}\nLegacy vectors: ${vectors.count}/${stats.totalNodes}${vectors.dimensions.length ? ` (${vectors.dimensions.join(", ")} dimensions)` : ""}\nAssistant tools: ${assistantTools}\nMessage retention: keep=${messageRetention.keep}, recentTurns=${messageRetention.recentTurns}, retentionDays=${messageRetention.retentionDays}, batchSize=${messageRetention.batchSize}, dryRun=${messageRetention.dryRun}, revision=${retentionRevision}\nRetention GC: runs=${retentionMetrics.runs}, dryRuns=${retentionMetrics.dryRuns}, selected=${retentionMetrics.selectedRows}, deleted=${retentionMetrics.deletedRows}, estimatedDeletedBytes=${retentionMetrics.deletedBytes}\nContext takeover: attached=${compactionMetrics.attached}, selected=${compactionMetrics.selected}, succeeded=${compactionMetrics.succeeded}, failed=${compactionMetrics.failed}, shadowedEvents=${compactionMetrics.shadowedEvents}, shadowedTokens=${compactionMetrics.shadowedTokens}, projectedTurns=${compactionMetrics.projectedTurns}, projectedEvents=${compactionMetrics.projectedEvents}, projectedTokens=${compactionMetrics.projectedTokens}`;
+            return `${latestFailure ? `Extraction attention required: ${latestFailure.extraction_error}\n` : ""}Graph Memory active (DSH native)\nStore: ${config.dbPath}\nTurn memories: ${stats.turnMemories}\nNavigation: ${stats.navigationTerms} terms / ${stats.navigationTriples} triples / ${stats.navigationCommunities} communities\nLegacy graph: ${stats.totalNodes} nodes / ${stats.totalEdges} edges\nMessages: ${messageCount}\nExtraction: ${extractionEnabled ? "enabled" : "disabled"} (pending=${extraction.pending}, succeeded=${extraction.succeeded}, quarantined=${extraction.quarantined})\nExtraction source: one completed turn = user question + final answer\nExtraction scheduling: live turn/end only, one serial worker per session, no startup history import, no automatic retries\nRecall: ${recallEnabled ? "enabled" : "disabled"}\nEmbedding: ${embeddingState}${embeddingModel}\nTurn vectors: ${turnVectorCount}/${stats.turnMemories}\nLegacy vectors: ${vectors.count}/${stats.totalNodes}${vectors.dimensions.length ? ` (${vectors.dimensions.join(", ")} dimensions)` : ""}\nAssistant tools: ${assistantTools}\nMessage retention: keep=${messageRetention.keep}, recentTurns=${messageRetention.recentTurns}, retentionDays=${messageRetention.retentionDays}, batchSize=${messageRetention.batchSize}, dryRun=${messageRetention.dryRun}, revision=${retentionRevision}\nRetention GC: runs=${retentionMetrics.runs}, dryRuns=${retentionMetrics.dryRuns}, selected=${retentionMetrics.selectedRows}, deleted=${retentionMetrics.deletedRows}, estimatedDeletedBytes=${retentionMetrics.deletedBytes}\nContext takeover: attached=${compactionMetrics.attached}, selected=${compactionMetrics.selected}, succeeded=${compactionMetrics.succeeded}, failed=${compactionMetrics.failed}, shadowedEvents=${compactionMetrics.shadowedEvents}, shadowedTokens=${compactionMetrics.shadowedTokens}, projectedTurns=${compactionMetrics.projectedTurns}, projectedEvents=${compactionMetrics.projectedEvents}, projectedTokens=${compactionMetrics.projectedTokens}`;
         },
     });
     registerAssistantTool({
