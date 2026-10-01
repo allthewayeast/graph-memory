@@ -8,9 +8,9 @@ function node(id: string, sourceSessions: string[]) {
 
 describe("DSH recall visibility", () => {
   it("places recalled history before the live user instruction", () => {
-    const system = { role: "system", source: { kind: "plugin" } };
+    const system = { role: "system", source: { kind: "system-prompt" } };
     const current = { role: "user", source: { kind: "user" }, content: "do the task" };
-    const recall = { role: "user", source: { kind: "plugin", plugin: "graph-memory" } };
+    const recall = { role: "user", source: { kind: "plugin:graph-memory" } };
     expect(insertDshRecallBeforeCurrentUser([system, current], recall)).toEqual([system, recall, current]);
   });
 

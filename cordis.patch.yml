@@ -19,6 +19,8 @@
         # are set, this route takes precedence over the foreground Agent model.
         llmProvider: !!js process.env.GRAPH_MEMORY_LLM_PROVIDER
         llmModel: !!js process.env.GRAPH_MEMORY_LLM_MODEL
+        # Leave unset for model-capability negotiation; explicit IDs must be
+        # advertised by the chosen provider/model route.
         llmReasoningEffort: !!js process.env.GRAPH_MEMORY_LLM_REASONING_EFFORT
         llmMaxTokens: !!js "process.env.GRAPH_MEMORY_LLM_MAX_TOKENS ? Number(process.env.GRAPH_MEMORY_LLM_MAX_TOKENS) : undefined"
         # Each committed DSH turn is one extraction job containing only the
